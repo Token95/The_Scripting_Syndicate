@@ -8,7 +8,8 @@ config.read('settings.ini')
 CIRCL_URL = config['API_ENDPOINTS']['circl_url']
 NIST_URL = config['API_ENDPOINTS']['nist_url']
 
-def get_cve_descriptions(cve_id):
+# Define the script to run against and open source api for vulnerablites    
+def get_cve_description(cve_id):
     """Hits the open-source CIRL API to get the human-readable description."""
     if cve_id == "None":
         return "No vulnerability identified."
@@ -22,9 +23,10 @@ def get_cve_descriptions(cve_id):
         print(f"[-] CIRCL_API Error: {e}")
     return "Failed to retrieve decription"
 
+# Define the script to take an CVE and run that through an open source API to get the CVSS score and get it severaity score
 def get_cvss_score(cve_id):
     """Hits the NIST NVD API to get the exact CVSS Base Score."""
-    if cve_id == "None"
+    if cve_id == "None":
         return 0.0
     print(f"[*] Fetching CVSS score for {cve_id} from NIST...")
     try: 
@@ -41,3 +43,19 @@ def get_cvss_score(cve_id):
         print(f"[-] NIST API Errior: {0}")
     return 0.0
       
+# test run for metting tomorrow 
+if __name__ == "__main__":
+    print("\n" +"="*50)
+    print("  LIVE THREAT INTEK API TEST")
+    print("="*50)
+
+# Try it on the VM thursday
+test_cve ="CVE-2021-41773"
+
+desc = get_cve_description(test_cve)
+score = get_cvss_score(test_cve)
+
+print("\n--- TEST RESULTS ---")
+print(f"Target CVE:   {test_cve}")
+print(f"Dasce Score:  {score} / 10")
+print(f"Description:  {desc}\n")
