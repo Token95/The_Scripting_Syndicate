@@ -25,6 +25,7 @@ try:
     import nmap            # Wrapper used to control the Nmap binary from Python
     import requests        # Handles HTTP GET requests to the CIRCL and NIST APIs
     import pyfiglet        # Generates the ASCII art banner for the CLI interface
+    import sys             # Handles exit codes, command-line argumentes, and terminal
 
 except ImportError as e:
     # 'e' contains the raw error message (e.g., "No module named 'requests'").
