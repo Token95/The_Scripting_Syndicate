@@ -3,46 +3,62 @@
 #  THE SCRIPTING SYNDICATE  -  Live Threat Intel (nmap + CVE lookup)
 # -----------------------------------------------------------------------
 #  What this script does:
-#    1. Silently makes sure Python dependencies are installed.
-#    2. Prints team banner.
-#    3. Runs nmap service/version scan against a target, with the
-#       "vulners" script to map service versions -> known CVEs.
-#    4. Every CVE it finds, pulls description from
-#       CIRCL and a CVSS severity score from NIST.
-#    5. Prints color-coded report and short summary.
+#    1. Interactively check Python dependencies [ENHANCED]
+#    2. Requests Opertator Authorization (Rules of Engagement) [ENHANCED]
+#    3. Validates targest format to prevent hangs [ENHANCED]
+#    4. Runs nmap services/version scan aganst a target
+#    5. Pulls CVE descriptions from CIRCL and CVSS scores from NIST.
+#    6. Generate a terminal report, CSV file, and runtimes Log. [ENHANCED]
 # =======================================================================
 
-# ---- Standard-library imports for the dependency bootstrap ------
-import os                 # run shell commands (clear screen)
-import sys                # interpreter path, argv, stdout, exit codes
-import subprocess         # shell to pip during the bootstrap
-import importlib.util     # check if module is installed without importing it
+# =======================================================================
+# [+] ENHANCEMENT 1: INTERACTIVE DEPENDENCY CHECK
+# -----------------------------------------------------------------------
+# Replaces the previous silent background installer. Silently executing
+# system commands can trigger security flags and makes troubleshooting
+# difficult for operators. This updated block attempts to import the
+# required third-party libraries first. If an ImportError is caught, it
+# pauses execution, notifies the operator exactly which package is missing,
+# and explicitly asks for authorization (y/N) before modifying the system.
+# =======================================================================
+try:
+    import nmap            # Wrapper used to control the Nmap binary from Python
+    import requests        # Handles HTTP GET requests to the CIRCL and NIST APIs
+    import pyfiglet        # Generates the ASCII art banner for the CLI interface
 
-# ---- Dependency bootstrap: silently install anything missing ----------
-# Runs BEFORE third-party imports below, so imports can't fail.
-# Key = the name you 'import', Value = the name pip installs (they differ
-# for python-nmap, which is imported as just 'nmap').
-REQUIRED = {
-    "requests": "requests",       # HTTP client for the API calls
-    "nmap": "python-nmap",        # Python wrapper around the nmap binary
-    "pyfiglet": "pyfiglet",       # turns text into ASCII-art for the banner
-}
-
-
-def _ensure_deps():
-    """Install any required package that isn't already importable, silently."""
-    for module, package in REQUIRED.items():          # walk each dependency
-        if importlib.util.find_spec(module) is None:  # None = not installed
-            subprocess.run(                           # call: pip install <pkg>
-                [sys.executable, "-m", "pip", "install", package,
-                 "--break-system-packages",           # allow install on managed Python
-                 "--quiet"],                           # suppress pip's own chatter
-                stdout=subprocess.DEVNULL,             # hide normal output
-                stderr=subprocess.DEVNULL,             # hide errors too (stay silent)
-            )
-
-
-_ensure_deps()   # run the check/install, before we import them
+except ImportError as e:
+    # 'e' contains the raw error message (e.g., "No module named 'requests'").
+    # We convert it to a string and split it at the single quotes to isolate just the package name.
+    missing_module = str(e).split("'")[1] if "'" in str(e) else str(e)
+    
+    # Display a highly visible warning block to the operator
+    print("=" * 50)
+    print(f"[-] WARNING: Missing required Python package: '{missing_module}'")
+    print("=" * 50)
+    
+    # Prompt the operator for explicit authorization before installing anything
+    choice = input(f"Would you like to install '{missing_module}' now? [y/N]: ").strip().lower()
+    
+    if choice == 'y':
+        print(f"[*] Installing {missing_module}...")
+        
+        # The 'nmap' library is imported as 'nmap', but the actual pip package is 'python-nmap'.
+        # This inline check ensures we tell pip to fetch the correct package name.
+        pkg_name = "python-nmap" if missing_module == "nmap" else missing_module
+        
+        # Execute the pip install command visibly in the terminal.
+        # - sys.executable ensures we use the pip associated with the current Python environment.
+        # - --break-system-packages allows installation on modern, managed Linux environments like our Ubuntu testing VM.
+        subprocess.run([sys.executable, "-m", "pip", "install", pkg_name, "--break-system-packages"])
+        
+        # Require a clean restart to ensure the newly installed module is properly loaded into memory
+        print("[+] Installation complete. Please restart the script.")
+        sys.exit(0)  # Exit code 0 indicates a clean, intentional termination
+        
+    else:
+        # If the user denies authorization, we cannot proceed. Exit gracefully.
+        print("[-] Cannot run without dependencies. Exiting.")
+        sys.exit(1)  # Exit code 1 indicates termination due to an error/missing requirement
 # -----------------------------------------------------------------------
 
 # ---- Third-party + remaining stdlib imports ------
@@ -52,6 +68,17 @@ import textwrap        # wrap long CVE descriptions
 import configparser    # read API URLs from settings.ini
 import requests        # HTTP requests
 import nmap            # nmap wrapper
+
+# [+] ENHANCEMENT 2: Imported modules for Data Export and Auditing
+import csv             
+import logging         
+
+# Configure the persistent Operator Log
+logging.basicConfig(
+    filename='operator.log', 
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # ---- Configuration: read API endpoints from settings.ini --------------
 config = configparser.ConfigParser()       # create config reader
@@ -84,9 +111,21 @@ def c(text, *styles):
 
 
 # ---- Status-line helpers (colored [*]/[+]/[-] prefixes) ----------
-def info(msg): print(f"{c('[*]', CYAN)} {msg}")   # [*] cyan   = informational
-def good(msg): print(f"{c('[+]', GREEN)} {msg}")  # [+] green  = good news
-def bad(msg):  print(f"{c('[-]', RED)} {msg}")    # [-] red    = problem/error
+
+# [+] ENHANCEMENT 2: Upgraded status helpers to simultaneously print to the terminal 
+# and record the exact same event in 'operator.log' for troubleshooting and auditing.
+def info(msg): 
+    print(f"{c('[*]', CYAN)} {msg}")      # [*] cyan   = informational
+    logging.info(msg)                     # Silently write to log file
+
+def good(msg): 
+    print(f"{c('[+]', GREEN)} {msg}")     # [+] green  = good news
+    logging.info(msg)                     # Silently write to log file
+
+def bad(msg):  
+    print(f"{c('[-]', RED)} {msg}")       # [-] red    = problem/error
+    logging.error(msg)                    # Silently write error to log file
+
 
 
 def severity(score):
@@ -234,7 +273,27 @@ def scan_target(target):
 
 # ---- Main: runs when the file is executed directly ---------------
 if __name__ == "__main__":
+    
+    # [+] ENHANCEMENT: Start execution timer for the End-of-Run Summary
+    start_time = time.time()
+    
     show_banner()                                                   # clear + print banner
+    
+    # [+] ENHANCEMENT: Mandatory Rules of Engagement (RoE) prompt
+    print(c("=" * 52, CYAN, BOLD))
+    print(c("                 AUTHORIZED USE ONLY", BRED, BOLD))
+    print(c(" Only scan systems you own or have explicit permission to assess.", DIM))
+    print(c("=" * 52, CYAN, BOLD))
+    
+    auth = input("Do you confirm you are authorized to scan this target? [y/N]: ").strip().lower()
+    if auth != 'y':
+        bad("Access Denied. You must be authorized to run this tool. Exiting.")
+        logging.warning("User aborted execution: Unauthorized scan attempt.")
+        sys.exit(0)
+        
+    logging.info("Operator authorized scan. Tool initialized.")
+    print()                                                         # blank spacer
+
     print(c("=" * 52, CYAN, BOLD))                                  # title bar top
     print(c("  LIVE THREAT INTEL  |  nmap + CVE lookup", CYAN, BOLD))# tool title
     print(c("=" * 52, CYAN, BOLD))                                  # title bar bottom
@@ -243,20 +302,34 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:                       # target passed as an argument
         target = sys.argv[1]
     else:                                       # nothing passed -> ask interactively
-        target = input("Target IP / hostname: ").strip()
+        target = input("\nTarget IP / hostname: ").strip()
 
     if not target:                              # empty input -> nothing to do
         bad("No target given. Exiting.")
+        logging.error("No target provided.")
         sys.exit(1)                             # exit code 1 = error
+
+    # [+] ENHANCEMENT: Pre-scan validation to prevent Nmap from hanging on bad IPs
+    # Regex checks for a valid IPv4 format or a basic domain name.
+    ip_pattern = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+    if not ip_pattern.match(target):
+        bad(f"Error: '{target}' is not a valid IP address or hostname format.")
+        logging.error(f"Invalid target format entered: {target}")
+        sys.exit(1)
+
+    logging.info(f"Target validated successfully: {target}")
 
     services = scan_target(target)              # run the nmap scan
 
     if not services:                            # scan came back empty
-        bad("No open ports found (host may be down or filtering).")
+        # [+] ENHANCEMENT: Updated error message to reflect testing edge-cases
+        bad("No open ports found (host may be down, invalid, or filtering).")
+        logging.warning(f"Scan finished, but no open ports found on {target}.")
         sys.exit(0)                             # exit code 0 = clean exit
 
     top_score = 0.0        # track highest severity seen (for the summary)
     vuln_services = 0      # count how many services had at least one CVE
+
 
     # ---- Per-service report loop --------------------------------------
     for svc in services:
@@ -288,11 +361,50 @@ if __name__ == "__main__":
 
             time.sleep(NIST_DELAY)                                 # pace requests (rate limit)
 
-    # ---- Summary ------------------------------------------------------
-    print()                                                        # spacer
-    print(c("=" * 52, CYAN, BOLD))                                 # summary bar top
-    label, color = severity(top_score)                             # bucket worst score
-    print(f"  Scanned {c(str(len(services)), BOLD)} open service(s); "  # how many services
-          f"{c(str(vuln_services), BOLD)} with known CVEs.")           # how many vulnerable
-    print(f"  Highest severity found: {c(f'{label} ({top_score}/10)', color, BOLD)}")  # worst finding
-    print(c("=" * 52, CYAN, BOLD))                                 # summary bar bottom
+   # =======================================================================
+    # [+] ENHANCEMENT: AUTOMATED CSV EXPORT (User Report)
+    # -----------------------------------------------------------------------
+    # Generates a structured CSV file after every scan for easier handoffs,
+    # auditing, or ingestion into SIEM platforms.
+    # =======================================================================
+    csv_filename = f"scan_report.csv"
+    try:
+        with open(csv_filename, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Target", "Port", "Service", "CVE ID"])
+            
+            # Loop back through our results to populate the rows
+            for s in services:
+                for cve in s.get('cves', []):
+                    writer.writerow([target, s['port'], s['name'], cve])
+                    
+        good(f"\nUser Report generated successfully: {csv_filename}")
+        logging.info(f"CSV report written successfully: {csv_filename}")
+    except Exception as e:
+        bad(f"\nFailed to write CSV: {e}")
+        logging.error(f"Failed to write CSV: {e}")
+
+    # =======================================================================
+    # [+] ENHANCEMENT: END-OF-RUN SUMMARY DASHBOARD
+    # -----------------------------------------------------------------------
+    # Calculates execution time and provides a clean snapshot of the scan 
+    # results, making the terminal output feel much more polished.
+    # =======================================================================
+    runtime = round(time.time() - start_time, 2)
+    total_cves = sum(len(s.get('cves', [])) for s in services)
+    label, color = severity(top_score)                             
+
+    print("\n" + c("=" * 52, CYAN, BOLD))
+    print(c("                 SCAN COMPLETE", BOLD))
+    print(c("=" * 52, CYAN, BOLD))
+    print(f" Target:                 {target}")
+    print(f" Total Open Services:    {len(services)}")
+    print(f" Vulnerable Services:    {vuln_services}")
+    print(f" Total CVEs Found:       {total_cves}")
+    print(f" Highest Severity:       {c(f'{label} ({top_score}/10)', color, BOLD)}")
+    print(f" Execution Time:         {runtime} seconds")
+    print(f" Report Saved:           {csv_filename}")
+    print(c("=" * 52, CYAN, BOLD))
+
+    # Log the final metrics
+    logging.info(f"Execution completed in {runtime}s. Vulnerable services: {vuln_services}. Total CVEs: {total_cves}.")
