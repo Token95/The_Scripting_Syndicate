@@ -10,7 +10,12 @@
 #    5. Pulls CVE descriptions from CIRCL and CVSS scores from NIST.
 #    6. Generate a terminal report, CSV file, and runtimes Log. [ENHANCED]
 # =======================================================================
+import os                 # run shell commands (like clear screen)
+import sys                # handles exit codes, command-line arguments, and terminal checks
+import subprocess         # shell to pip during the bootstrap
+import time               # sleep() to pace NIST requests
 
+# ... the rest of your imports ...
 # =======================================================================
 # [+] ENHANCEMENT 1: INTERACTIVE DEPENDENCY CHECK
 # -----------------------------------------------------------------------
@@ -25,7 +30,7 @@ try:
     import nmap            # Wrapper used to control the Nmap binary from Python
     import requests        # Handles HTTP GET requests to the CIRCL and NIST APIs
     import pyfiglet        # Generates the ASCII art banner for the CLI interface
-    import sys             # Handles exit codes, command-line argumentes, and terminal
+   
 
 except ImportError as e:
     # 'e' contains the raw error message (e.g., "No module named 'requests'").
