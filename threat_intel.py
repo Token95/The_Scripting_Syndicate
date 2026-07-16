@@ -413,7 +413,7 @@ if __name__ == "__main__":
     print(c("=" * 52, CYAN, BOLD))
 
     # Log the final metrics
-   logging.info(f"Execution completed in {runtime}s. Vulnerable services: {vuln_services}. Total CVEs: {total_cves}.")
+    logging.info(f"Execution completed in {runtime}s. Vulnerable services: {vuln_services}. Total CVEs: {total_cves}.")
 
     # =======================================================================
     # [+] ENHANCEMENT: TRIGGER AUTOMATED PDF REPORT
