@@ -68,6 +68,42 @@ except ImportError as e:
         sys.exit(1)  # Exit code 1 indicates termination due to an error/missing requirement
 # -----------------------------------------------------------------------
 
+# =======================================================================
+# [+] ENHANCEMENT: DEPENDENCY CHECKER (LATEST VERSIONS & VERIFICATION LOOP)
+# =======================================================================
+
+def check_dependencies():
+    """Loops to ensure all required packages are installed and up to date."""
+    required_packages = {
+        'nmap': 'python-nmap',
+        'requests': 'requests',
+        'pyfiglet': 'pyfiglet',
+        'fpdf': 'fpdf'
+    }
+    
+    while True:
+        missing = []
+        for module, pip_name in required_packages.items():
+            try:
+                __import__(module)
+            except ImportError:
+                missing.append(pip_name)
+                
+        if not missing:
+            break # All dependencies are met, break the loop!
+            
+        print(f"\n[!] Missing required packages: {', '.join(missing)}")
+        ans = input("Would you like to install the latest versions now? [y/N]: ").strip().lower()
+        
+        if ans in ['y', 'yes']:
+            print("[*] Installing latest dependencies...")
+            import subprocess
+            # Added --upgrade to ensure we grab the absolute latest versions
+            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade"] + missing)
+            print("[*] Install complete. Looping back to verify...")
+        else:
+            print("[-] Cannot proceed without dependencies. Exiting.")
+            sys.exit(1)
 # ---- Third-party + remaining stdlib imports ------
 import re              # regex, used to pull CVE IDs out of nmap output
 import time            # sleep() to pace NIST requests
@@ -279,7 +315,10 @@ def scan_target(target):
 
 
 # ---- Main: runs when the file is executed directly ---------------
+
 if __name__ == "__main__":
+
+
 # =======================================================================
     # [+] ENHANCEMENT: ZERO-TOUCH AUTO-DISCOVER & SUBNET SWEEP
     # -----------------------------------------------------------------------
@@ -287,102 +326,105 @@ if __name__ == "__main__":
     # subnet. Bypasses user input entirely unless a target is explicitly 
     # passed via the command line.
     # =======================================================================
+
+
+    # Start execution timer for the End-of-Run Summary
+    start_time = time.time()
+    
+    show_banner()                                               # clear + print banner
+    
+    print(c("=" * 52, CYAN, BOLD))                              # title bar top
+    print(c("  LIVE THREAT INTEL  |  nmap + CVE lookup", CYAN, BOLD)) # tool title
+    print(c("=" * 52, CYAN, BOLD))                              # title bar bottom
+
+    # =======================================================================
+    # [+] ENHANCEMENT: AUTHORIZATION & INTERACTIVE MENU
+    # =======================================================================
+    
+    # 1. Mandatory Authorization Gate FIRST
+
+    print("\n" + c("[!] RULES OF ENGAGEMENT", YELLOW))
+    roe = input("Do you have explicit authorization to scan this environment? [y/N]: ").strip().lower()
+    if roe not in ['y', 'yes']:
+        bad("Authorization denied. Exiting script.")
+        logging.warning("User denied authorization. Exiting.")
+        sys.exit(1)
+        
+    logging.info("Operator authorized scan. Tool initialized.")
+
+    # 2. Get local network info for the menu
+
     def get_local_ip():
-        """Connects a dummy socket to pull the true local IP on the active interface."""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(('8.8.8.8', 80)) # Doesn't send data, just routes the interface
+            s.connect(('8.8.8.8', 80))
             local_ip = s.getsockname()[0]
             s.close()
             return local_ip
         except Exception:
-            return "127.0.0.1" # Fallback if entirely offline
+            return "127.0.0.1"
 
-    # Get target: from the command line if given, else completely automate it.
-    if len(sys.argv) > 1:                       
+    local_ip = get_local_ip()
+
+    # Safely calculate the /24 subnet based on the discovered IP
+
+    subnet = "127.0.0.1" if local_ip == "127.0.0.1" else f"{local_ip.rsplit('.', 1)[0]}.0/24"
+
+    # 3. Interactive Menu Loop
+
+    target = None
+    if len(sys.argv) > 1: 
+
+        # If the operator passed an IP via command line, skip the menu
+
         target = sys.argv[1]
-    else:                                       
-        local_ip = get_local_ip()
-        
-        # If we are offline, just scan localhost. Otherwise, calculate the /24 VLAN.
-        if local_ip == "127.0.0.1":
-            target = local_ip
-            print(f"\n[*] Offline mode. Auto-targeting localhost: {c(target, GREEN)}")
-        else:
-            # Split the IP (e.g., 192.168.1.45), drop the last number, and add .0/24
-            ip_parts = local_ip.split('.')
-            target = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
-            print(f"\n[*] No target specified. Auto-sweeping local subnet: {c(target, GREEN)}")
+    else:
+        while True:
+            print("\n" + c("=== TARGET SELECTION MENU ===", CYAN))
+            print("  1. Scan Localhost (127.0.0.1)")
+            print(f"  2. Scan Local Network ({subnet})")
+            print("  3. Enter Custom Target (IP / Subnet / Hostname)")
+            print("  4. End Scan / Exit")
+            
+            choice = input(f"\nSelect an option [1-4]: ").strip()
+            
+            if choice == '1':
+                target = "127.0.0.1"
+                break
+            elif choice == '2':
+                target = subnet
+                break
+            elif choice == '3':
+                target = input("Enter Custom Target: ").strip()
 
-    # Updated Regex: Perfectly accepts Subnets (CIDR notation like /24)
-    ip_pattern = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:/[0-9]{1,2})?$|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
-    if not ip_pattern.match(target):
-        bad(f"Error: '{target}' is not a valid IP, Subnet, or hostname format.")
-        logging.error(f"Invalid target format entered: {target}")
-        sys.exit(1)
+                # Regex validation before accepting the custom input
+
+                ip_pattern = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:/[0-9]{1,2})?$|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+                if not ip_pattern.match(target):
+                    bad("Error: Invalid IP, Subnet, or hostname format. Please try again.")
+                    continue # Loops them back to the menu
+                break
+            elif choice == '4':
+                good("Exiting The Scripting Syndicate tool. Goodbye!")
+                sys.exit(0)
+            else:
+                bad("Invalid selection. Please enter a number between 1 and 4.")
 
     logging.info(f"Target validated successfully: {target}")
 
-    services = scan_target(target)              # run the nmap scan
+    # 4. Execute the Scan
 
-    # [+] ENHANCEMENT: Start execution timer for the End-of-Run Summary
-    start_time = time.time()
-    
-    show_banner()                                                   # clear + print banner
-    
-    # [+] ENHANCEMENT: Mandatory Rules of Engagement (RoE) prompt
-    print(c("=" * 52, CYAN, BOLD))
-    print(c("                 AUTHORIZED USE ONLY", BRED, BOLD))
-    print(c(" Only scan systems you own or have explicit permission to assess.", DIM))
-    print(c("=" * 52, CYAN, BOLD))
-    
-    auth = input("Do you confirm you are authorized to scan this target? [y/N]: ").strip().lower()
-    if auth != 'y':
-        bad("Access Denied. You must be authorized to run this tool. Exiting.")
-        logging.warning("User aborted execution: Unauthorized scan attempt.")
-        sys.exit(0)
-        
-    logging.info("Operator authorized scan. Tool initialized.")
-    print()                                                         # blank spacer
+    services = scan_target(target)
 
-    print(c("=" * 52, CYAN, BOLD))                                  # title bar top
-    print(c("  LIVE THREAT INTEL  |  nmap + CVE lookup", CYAN, BOLD))# tool title
-    print(c("=" * 52, CYAN, BOLD))                                  # title bar bottom
+    # 5. Handle empty scan results
 
-    # Get target: from the command line if given, else prompt for it.
-    if len(sys.argv) > 1:                       # target passed as an argument
-        target = sys.argv[1]
-    else:                                       # nothing passed -> ask interactively
-        target = input("\nTarget IP / hostname: ").strip()
-
-    if not target:                              # empty input -> nothing to do
-        bad("No target given. Exiting.")
-        logging.error("No target provided.")
-        sys.exit(1)                             # exit code 1 = error
-
-    # [+] ENHANCEMENT: Pre-scan validation to prevent Nmap from hanging on bad IPs
-
-    # Regex checks for a valid IPv4 format or a basic domain name.
-
-    ip_pattern = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
-    if not ip_pattern.match(target):
-        bad(f"Error: '{target}' is not a valid IP address or hostname format.")
-        logging.error(f"Invalid target format entered: {target}")
-        sys.exit(1)
-
-    logging.info(f"Target validated successfully: {target}")
-
-    services = scan_target(target)              # run the nmap scan
-
-    if not services:                            # scan came back empty
-        # [+] ENHANCEMENT: Updated error message to reflect testing edge-cases
+    if not services:
         bad("No open ports found (host may be down, invalid, or filtering).")
         logging.warning(f"Scan finished, but no open ports found on {target}.")
-        sys.exit(0)                             # exit code 0 = clean exit
+        sys.exit(0)
 
     top_score = 0.0        # track highest severity seen (for the summary)
     vuln_services = 0      # count how many services had at least one CVE
-
 
     # ---- Per-service report loop --------------------------------------
     for svc in services:
@@ -413,14 +455,19 @@ if __name__ == "__main__":
                 print(f"    {line}")                               # indented, one line at a time
 
             time.sleep(NIST_DELAY)                                 # pace requests (rate limit)
-# =======================================================================
-    # [+] ENHANCEMENT: AUTOMATED CSV EXPORT (FULL INVENTORY)
-    # -----------------------------------------------------------------------
-    # Automatically generates a CSV containing every open port discovered.
-    # Ports with no known CVEs are logged as "None - Clean" for team analysis.
+
     # =======================================================================
-    csv_filename = "scan_report.csv"
+    # [+] ENHANCEMENT: AUTOMATED CSV EXPORT (DYNAMIC FILENAMES)
+    # =======================================================================
     try:
+        import csv
+        from datetime import datetime
+        
+        # Generate a unique timestamp for the filenames (YYYYMMDD_HHMMSS)
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_filename = f"scan_report_{timestamp_str}.csv"
+        pdf_filename = f"Executive_Report_{timestamp_str}.pdf"
+
         with open(csv_filename, mode="w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
             # Write the column headers
@@ -429,12 +476,8 @@ if __name__ == "__main__":
             # Loop back through our results to populate the rows
             for s in services:
                 cves = s.get('cves', [])
-                
-                # If the list of CVEs is empty, log the open port as clean
                 if not cves:
                     writer.writerow([s['host'], s['port'], s['name'], "None - Clean"])
-                
-                # If there are vulnerabilities, log a row for each one
                 else:
                     for cve in cves:
                         writer.writerow([s['host'], s['port'], s['name'], cve])
@@ -442,23 +485,18 @@ if __name__ == "__main__":
         good(f"\nUser Report generated successfully: {csv_filename}")
         logging.info(f"{csv_filename} generated successfully.")
     except Exception as e:
-        # Handle file I/O or CSV writing errors gracefully
-        logging.exception("Failed to generate CSV report")
-        try:
-            # Fallback: notify user on stderr if 'good' isn't appropriate
-            print(f"Failed to generate {csv_filename}: {e}")
-        except Exception:
-            pass
-    # -----------------------------------------------------------------------
-    # Calculates execution time and provides a clean snapshot of the scan 
-    # results, making the terminal output feel much more polished.
+        bad(f"\nFailed to create CSV report: {e}")
+        logging.error(f"CSV Generation failed: {e}")
+
+    # =======================================================================
+    # [+] TERMINAL DASHBOARD: END-OF-RUN SUMMARY
     # =======================================================================
     runtime = round(time.time() - start_time, 2)
     total_cves = sum(len(s.get('cves', [])) for s in services)
     label, color = severity(top_score)                             
 
     print("\n" + c("=" * 52, CYAN, BOLD))
-    print(c("                 SCAN COMPLETE", BOLD))
+    print(c("                SCAN COMPLETE", BOLD))
     print(c("=" * 52, CYAN, BOLD))
     print(f" Target:                 {target}")
     print(f" Total Open Services:    {len(services)}")
@@ -474,18 +512,16 @@ if __name__ == "__main__":
 
     # =======================================================================
     # [+] ENHANCEMENT: TRIGGER AUTOMATED PDF REPORT
-    # -----------------------------------------------------------------------
-    # Automatically runs report.py so the operator gets both the CSV and the 
-    # finalized PDF without needing to run a second command.
     # =======================================================================
     print("\n" + c("[*] Launching PDF Report Generator...", CYAN))
     try:
         import subprocess
-        # Pass the dashboard summary data directly into the PDF script
+        # Pass the dashboard summary data AND the dynamic filenames directly into the PDF script
         subprocess.run([
             sys.executable, "report.py", 
             target, str(len(services)), str(vuln_services), 
-            str(total_cves), str(top_score), label, str(runtime)
+            str(total_cves), str(top_score), label, str(runtime),
+            csv_filename, pdf_filename
         ])
     except Exception as e:
         bad(f"Failed to automatically generate PDF report: {e}")

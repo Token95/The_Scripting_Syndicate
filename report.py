@@ -92,7 +92,6 @@ def generate_pdf(csv_file, pdf_file, stats):
             pdf.cell(0, 10, f"Detailed Findings: {target}", ln=True)
             pdf.ln(2)
             
-            # [+] ENHANCEMENT: Re-added the explanatory paragraph here
             pdf.set_font("Arial", size=11)
             pdf.multi_cell(0, 7, f"The machine at {target} was scanned. The following open ports and services were discovered, along with any known CVE vulnerabilities. Services marked as 'None - Clean' have no known immediate threats.")
             pdf.ln(5)
@@ -123,6 +122,7 @@ def generate_pdf(csv_file, pdf_file, stats):
     pdf.cell(0, 7, "- Adam Timmons (Tester)", ln=True)
     pdf.cell(0, 7, "- Edy Silveira de Souza (Presenter)", ln=True)
 
+    # Put the exact timestamp inside the PDF footer so they match the filename
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     pdf.ln(5)
     pdf.set_font("Arial", "I", 10)
@@ -132,9 +132,6 @@ def generate_pdf(csv_file, pdf_file, stats):
     print(f"[+] Executive Report successfully generated: {pdf_file}")
 
 if __name__ == "__main__":
-    INPUT_CSV = "scan_report.csv"
-    OUTPUT_PDF = "Executive_Vulnerability_Report.pdf"
-    
     stats = {
         'target': sys.argv[1] if len(sys.argv) > 1 else "Unknown",
         'total_svc': sys.argv[2] if len(sys.argv) > 2 else "0",
@@ -144,5 +141,9 @@ if __name__ == "__main__":
         'label': sys.argv[6] if len(sys.argv) > 6 else "NONE",
         'runtime': sys.argv[7] if len(sys.argv) > 7 else "0.0"
     }
+    
+    # Catch the dynamic filenames passed from threat_intel.py
+    INPUT_CSV = sys.argv[8] if len(sys.argv) > 8 else "scan_report.csv"
+    OUTPUT_PDF = sys.argv[9] if len(sys.argv) > 9 else "Executive_Vulnerability_Report.pdf"
     
     generate_pdf(INPUT_CSV, OUTPUT_PDF, stats)
