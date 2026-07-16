@@ -419,9 +419,9 @@ if __name__ == "__main__":
     # Automatically generates a CSV containing every open port discovered.
     # Ports with no known CVEs are logged as "None - Clean" for team analysis.
     # =======================================================================
+    csv_filename = "scan_report.csv"
     try:
-        import csv
-        with open("scan_report.csv", mode="w", newline="", encoding="utf-8") as file:
+        with open(csv_filename, mode="w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
             # Write the column headers
             writer.writerow(["Target", "Port", "Service", "CVE ID"])
@@ -439,14 +439,8 @@ if __name__ == "__main__":
                     for cve in cves:
                         writer.writerow([s['host'], s['port'], s['name'], cve])
                         
-        good("\nUser Report generated successfully: scan_report.csv")
-        logging.info("scan_report.csv generated successfully.")
-    except Exception as e:
-        bad(f"\nFailed to create CSV report: {e}")
-        logging.error(f"CSV Generation failed: {e}")
-
-    # =======================================================================
-    # [+] ENHANCEMENT: END-OF-RUN SUMMARY DASHBOARD
+        good(f"\nUser Report generated successfully: {csv_filename}")
+        logging.info(f"{csv_filename} generated successfully.")
     # -----------------------------------------------------------------------
     # Calculates execution time and provides a clean snapshot of the scan 
     # results, making the terminal output feel much more polished.
