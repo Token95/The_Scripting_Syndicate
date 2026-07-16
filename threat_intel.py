@@ -441,6 +441,14 @@ if __name__ == "__main__":
                         
         good(f"\nUser Report generated successfully: {csv_filename}")
         logging.info(f"{csv_filename} generated successfully.")
+    except Exception as e:
+        # Handle file I/O or CSV writing errors gracefully
+        logging.exception("Failed to generate CSV report")
+        try:
+            # Fallback: notify user on stderr if 'good' isn't appropriate
+            print(f"Failed to generate {csv_filename}: {e}")
+        except Exception:
+            pass
     # -----------------------------------------------------------------------
     # Calculates execution time and provides a clean snapshot of the scan 
     # results, making the terminal output feel much more polished.
