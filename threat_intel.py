@@ -413,4 +413,18 @@ if __name__ == "__main__":
     print(c("=" * 52, CYAN, BOLD))
 
     # Log the final metrics
-    logging.info(f"Execution completed in {runtime}s. Vulnerable services: {vuln_services}. Total CVEs: {total_cves}.")
+   logging.info(f"Execution completed in {runtime}s. Vulnerable services: {vuln_services}. Total CVEs: {total_cves}.")
+
+    # =======================================================================
+    # [+] ENHANCEMENT: TRIGGER AUTOMATED PDF REPORT
+    # -----------------------------------------------------------------------
+    # Automatically runs report.py so the operator gets both the CSV and the 
+    # finalized PDF without needing to run a second command.
+    # =======================================================================
+    print("\n" + c("[*] Launching PDF Report Generator...", CYAN))
+    try:
+        import subprocess
+        subprocess.run([sys.executable, "report.py"])
+    except Exception as e:
+        bad(f"Failed to automatically generate PDF report: {e}")
+        logging.error(f"Failed to execute report.py: {e}")
