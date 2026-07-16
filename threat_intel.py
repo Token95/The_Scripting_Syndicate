@@ -12,6 +12,7 @@
 # =======================================================================
 import os                 # run shell commands (like clear screen)
 import sys                # handles exit codes, command-line arguments, and terminal checks
+import socket             # [+] ENHANCEMENT: auto-detect local network IP
 import subprocess         # shell to pip during the bootstrap
 import time               # sleep() to pace NIST requests
 
@@ -379,10 +380,11 @@ if __name__ == "__main__":
             writer = csv.writer(f)
             writer.writerow(["Target", "Port", "Service", "CVE ID"])
             
-            # Loop back through our results to populate the rows
+          # Loop back through our results to populate the rows
             for s in services:
                 for cve in s.get('cves', []):
-                    writer.writerow([target, s['port'], s['name'], cve])
+                    # Changed 'target' to 's['host']' so it logs the specific machine IP!
+                    writer.writerow([s['host'], s['port'], s['name'], cve])
                     
         good(f"\nUser Report generated successfully: {csv_filename}")
         logging.info(f"CSV report written successfully: {csv_filename}")
@@ -424,7 +426,12 @@ if __name__ == "__main__":
     print("\n" + c("[*] Launching PDF Report Generator...", CYAN))
     try:
         import subprocess
-        subprocess.run([sys.executable, "report.py"])
+        # Pass the dashboard summary data directly into the PDF script
+        subprocess.run([
+            sys.executable, "report.py", 
+            target, str(len(services)), str(vuln_services), 
+            str(total_cves), str(top_score), label, str(runtime)
+        ])
     except Exception as e:
         bad(f"Failed to automatically generate PDF report: {e}")
         logging.error(f"Failed to execute report.py: {e}")
