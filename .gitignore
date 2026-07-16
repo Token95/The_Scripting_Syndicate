@@ -1,0 +1,5 @@
+# Ignore output files
+operator.log
+scan_report.csv
+Executive_Vulnerability_Report.pdf
+__pycache__/
