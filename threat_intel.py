@@ -463,8 +463,8 @@ if __name__ == "__main__":
         import csv
         from datetime import datetime
         
-        # Generate a unique timestamp for the filenames (YYYYMMDD_HHMMSS)
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Generate a unique timestamp for the filenames (YYYY-MM-DD_HHMM)
+        timestamp_str = datetime.now().strftime("%Y-%m-%d_%H%M")
         csv_filename = f"scan_report_{timestamp_str}.csv"
         pdf_filename = f"Executive_Report_{timestamp_str}.pdf"
 

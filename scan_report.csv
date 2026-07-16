@@ -1,5 +1,0 @@
-Target,Port,Service,CVE ID
-127.0.0.1,135,msrpc,None - Clean
-127.0.0.1,445,microsoft-ds,None - Clean
-127.0.0.1,3389,ms-wbt-server,None - Clean
-127.0.0.1,5357,http,None - Clean

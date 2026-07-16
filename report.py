@@ -122,8 +122,8 @@ def generate_pdf(csv_file, pdf_file, stats):
     pdf.cell(0, 7, "- Adam Timmons (Tester)", ln=True)
     pdf.cell(0, 7, "- Edy Silveira de Souza (Presenter)", ln=True)
 
-    # Put the exact timestamp inside the PDF footer so they match the filename
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Executive-friendly report footer (e.g., July 15, 2026 at 02:30 PM)
+    timestamp = datetime.now().strftime("%B %d, %Y at %I:%M %p (Local Time)")
     pdf.ln(5)
     pdf.set_font("Arial", "I", 10)
     pdf.cell(0, 7, f"Official scan concluded on: {timestamp}", ln=True)
