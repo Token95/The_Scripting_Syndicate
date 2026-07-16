@@ -280,7 +280,51 @@ def scan_target(target):
 
 # ---- Main: runs when the file is executed directly ---------------
 if __name__ == "__main__":
-    
+# =======================================================================
+    # [+] ENHANCEMENT: ZERO-TOUCH AUTO-DISCOVER & SUBNET SWEEP
+    # -----------------------------------------------------------------------
+    # Automatically detects the machine's local IP and calculates the /24 
+    # subnet. Bypasses user input entirely unless a target is explicitly 
+    # passed via the command line.
+    # =======================================================================
+    def get_local_ip():
+        """Connects a dummy socket to pull the true local IP on the active interface."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80)) # Doesn't send data, just routes the interface
+            local_ip = s.getsockname()[0]
+            s.close()
+            return local_ip
+        except Exception:
+            return "127.0.0.1" # Fallback if entirely offline
+
+    # Get target: from the command line if given, else completely automate it.
+    if len(sys.argv) > 1:                       
+        target = sys.argv[1]
+    else:                                       
+        local_ip = get_local_ip()
+        
+        # If we are offline, just scan localhost. Otherwise, calculate the /24 VLAN.
+        if local_ip == "127.0.0.1":
+            target = local_ip
+            print(f"\n[*] Offline mode. Auto-targeting localhost: {c(target, GREEN)}")
+        else:
+            # Split the IP (e.g., 192.168.1.45), drop the last number, and add .0/24
+            ip_parts = local_ip.split('.')
+            target = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
+            print(f"\n[*] No target specified. Auto-sweeping local subnet: {c(target, GREEN)}")
+
+    # Updated Regex: Perfectly accepts Subnets (CIDR notation like /24)
+    ip_pattern = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:/[0-9]{1,2})?$|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+    if not ip_pattern.match(target):
+        bad(f"Error: '{target}' is not a valid IP, Subnet, or hostname format.")
+        logging.error(f"Invalid target format entered: {target}")
+        sys.exit(1)
+
+    logging.info(f"Target validated successfully: {target}")
+
+    services = scan_target(target)              # run the nmap scan
+
     # [+] ENHANCEMENT: Start execution timer for the End-of-Run Summary
     start_time = time.time()
     
@@ -317,7 +361,9 @@ if __name__ == "__main__":
         sys.exit(1)                             # exit code 1 = error
 
     # [+] ENHANCEMENT: Pre-scan validation to prevent Nmap from hanging on bad IPs
+
     # Regex checks for a valid IPv4 format or a basic domain name.
+
     ip_pattern = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
     if not ip_pattern.match(target):
         bad(f"Error: '{target}' is not a valid IP address or hostname format.")
@@ -367,30 +413,37 @@ if __name__ == "__main__":
                 print(f"    {line}")                               # indented, one line at a time
 
             time.sleep(NIST_DELAY)                                 # pace requests (rate limit)
-
-   # =======================================================================
-    # [+] ENHANCEMENT: AUTOMATED CSV EXPORT (User Report)
+# =======================================================================
+    # [+] ENHANCEMENT: AUTOMATED CSV EXPORT (FULL INVENTORY)
     # -----------------------------------------------------------------------
-    # Generates a structured CSV file after every scan for easier handoffs,
-    # auditing, or ingestion into SIEM platforms.
+    # Automatically generates a CSV containing every open port discovered.
+    # Ports with no known CVEs are logged as "None - Clean" for team analysis.
     # =======================================================================
-    csv_filename = f"scan_report.csv"
     try:
-        with open(csv_filename, mode='w', newline='') as f:
-            writer = csv.writer(f)
+        import csv
+        with open("scan_report.csv", mode="w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            # Write the column headers
             writer.writerow(["Target", "Port", "Service", "CVE ID"])
             
-          # Loop back through our results to populate the rows
+            # Loop back through our results to populate the rows
             for s in services:
-                for cve in s.get('cves', []):
-                    # Changed 'target' to 's['host']' so it logs the specific machine IP!
-                    writer.writerow([s['host'], s['port'], s['name'], cve])
-                    
-        good(f"\nUser Report generated successfully: {csv_filename}")
-        logging.info(f"CSV report written successfully: {csv_filename}")
+                cves = s.get('cves', [])
+                
+                # If the list of CVEs is empty, log the open port as clean
+                if not cves:
+                    writer.writerow([s['host'], s['port'], s['name'], "None - Clean"])
+                
+                # If there are vulnerabilities, log a row for each one
+                else:
+                    for cve in cves:
+                        writer.writerow([s['host'], s['port'], s['name'], cve])
+                        
+        good("\nUser Report generated successfully: scan_report.csv")
+        logging.info("scan_report.csv generated successfully.")
     except Exception as e:
-        bad(f"\nFailed to write CSV: {e}")
-        logging.error(f"Failed to write CSV: {e}")
+        bad(f"\nFailed to create CSV report: {e}")
+        logging.error(f"CSV Generation failed: {e}")
 
     # =======================================================================
     # [+] ENHANCEMENT: END-OF-RUN SUMMARY DASHBOARD
