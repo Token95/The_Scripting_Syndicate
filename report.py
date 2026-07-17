@@ -1,8 +1,24 @@
 #!/usr/bin/env python3
 import csv
 import sys
+import subprocess
 import os
 from datetime import datetime
+
+def ensure_dependencies():
+    """Ensure fpdf is installed before attempting to run the report."""
+    try:
+        import fpdf
+    except ImportError:
+        print("[!] FPDF not found. Installing now...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "fpdf"])
+        # Re-import after install
+        import fpdf
+
+# Run this immediately
+ensure_dependencies()
+
+# NOW you can safely import FPDF
 from fpdf import FPDF
 
 # =======================================================================
