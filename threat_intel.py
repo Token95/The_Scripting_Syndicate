@@ -10,6 +10,7 @@
 #    5. Pulls CVE descriptions from CIRCL and CVSS scores from NIST.
 #    6. Generate a terminal report, CSV file, and runtimes Log. [ENHANCED]
 # =======================================================================
+
 import os                 # run shell commands (like clear screen)
 import sys                # handles exit codes, command-line arguments, and terminal checks
 import socket             # [+] ENHANCEMENT: auto-detect local network IP
@@ -27,6 +28,7 @@ import time               # sleep() to pace NIST requests
 # pauses execution, notifies the operator exactly which package is missing,
 # and explicitly asks for authorization (y/N) before modifying the system.
 # =======================================================================
+
 try:
     import nmap            # Wrapper used to control the Nmap binary from Python
     import requests        # Handles HTTP GET requests to the CIRCL and NIST APIs
@@ -34,16 +36,20 @@ try:
    
 
 except ImportError as e:
+
     # 'e' contains the raw error message (e.g., "No module named 'requests'").
     # We convert it to a string and split it at the single quotes to isolate just the package name.
+
     missing_module = str(e).split("'")[1] if "'" in str(e) else str(e)
     
     # Display a highly visible warning block to the operator
+
     print("=" * 50)
     print(f"[-] WARNING: Missing required Python package: '{missing_module}'")
     print("=" * 50)
     
     # Prompt the operator for explicit authorization before installing anything
+
     choice = input(f"Would you like to install '{missing_module}' now? [y/N]: ").strip().lower()
     
     if choice == 'y':
@@ -51,19 +57,24 @@ except ImportError as e:
         
         # The 'nmap' library is imported as 'nmap', but the actual pip package is 'python-nmap'.
         # This inline check ensures we tell pip to fetch the correct package name.
+
         pkg_name = "python-nmap" if missing_module == "nmap" else missing_module
         
         # Execute the pip install command visibly in the terminal.
         # - sys.executable ensures we use the pip associated with the current Python environment.
         # - --break-system-packages allows installation on modern, managed Linux environments like our Ubuntu testing VM.
+
         subprocess.run([sys.executable, "-m", "pip", "install", pkg_name, "--break-system-packages"])
         
         # Require a clean restart to ensure the newly installed module is properly loaded into memory
+
         print("[+] Installation complete. Please restart the script.")
         sys.exit(0)  # Exit code 0 indicates a clean, intentional termination
         
     else:
+
         # If the user denies authorization, we cannot proceed. Exit gracefully.
+
         print("[-] Cannot run without dependencies. Exiting.")
         sys.exit(1)  # Exit code 1 indicates termination due to an error/missing requirement
 # -----------------------------------------------------------------------
@@ -98,13 +109,17 @@ def check_dependencies():
         if ans in ['y', 'yes']:
             print("[*] Installing latest dependencies...")
             import subprocess
+
             # Added --upgrade to ensure we grab the absolute latest versions
+
             subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade"] + missing)
             print("[*] Install complete. Looping back to verify...")
         else:
             print("[-] Cannot proceed without dependencies. Exiting.")
             sys.exit(1)
+
 # ---- Third-party + remaining stdlib imports ------
+
 import re              # regex, used to pull CVE IDs out of nmap output
 import time            # sleep() to pace NIST requests
 import textwrap        # wrap long CVE descriptions
@@ -113,10 +128,12 @@ import requests        # HTTP requests
 import nmap            # nmap wrapper
 
 # [+] ENHANCEMENT 2: Imported modules for Data Export and Auditing
+
 import csv             
 import logging         
 
 # Configure the persistent Operator Log
+
 logging.basicConfig(
     filename='operator.log', 
     level=logging.INFO, 
@@ -124,6 +141,7 @@ logging.basicConfig(
 )
 
 # ---- Configuration: read API endpoints from settings.ini --------------
+
 config = configparser.ConfigParser()       # create config reader
 config.read('settings.ini')                # load ini file from cwd
 NIST_URL = config['API_ENDPOINTS']['nist_url']    # NVD score endpoint (+ cveId=)
@@ -131,10 +149,12 @@ CIRCL_URL = config['API_ENDPOINTS']['circl_url']  # CIRCL description endpoint
 NIST_API_KEY = config['API_ENDPOINTS'].get('nist_api_key','') # Safely load key if it exists
 
 # ---- Tunables ---------------------------------------------------------
+
 MAX_CVES_PER_SERVICE = 5   # list the top N CVEs per service (vulners lists worst-first)
 NIST_DELAY = 1.5           # seconds to wait between NIST calls (respect rate limit)
 
 # ---- Colors: ANSI codes for terminal styling -------------------
+
 USE_COLOR = sys.stdout.isatty()   # True for a terminal; False if piped to a file
 RESET  = "\033[0m"     # reset all styling back to normal
 BOLD   = "\033[1m"     # bold text
@@ -157,6 +177,7 @@ def c(text, *styles):
 
 # [+] ENHANCEMENT 2: Upgraded status helpers to simultaneously print to the terminal 
 # and record the exact same event in 'operator.log' for troubleshooting and auditing.
+
 def info(msg): 
     print(f"{c('[*]', CYAN)} {msg}")      # [*] cyan   = informational
     logging.info(msg)                     # Silently write to log file
@@ -190,6 +211,7 @@ def rule(width=52):
 
 
 # ---- Banner: team name (ASCII art) + roster --------------------------
+
 BANNER_TEXT = "Scripting Syndicate"   # text rendered as ASCII art
 BANNER_FONT = "small"                 # any installed pyfiglet font: small/standard/slant/big
 
@@ -240,7 +262,9 @@ def get_cve_description(cve_id):
         response = requests.get(f"{CIRCL_URL}{cve_id}", timeout=10)   # GET the CVE record
         if response.status_code == 200 and response.json():          # got a valid JSON body
             data = response.json()                                   # parse it
+
             # In the CVE 5.0 format the text lives at containers.cna.descriptions[].
+
             descriptions = data.get("containers", {}).get("cna", {}).get("descriptions", [])
             for d in descriptions:                                   # look through each entry
                 if d.get("lang", "").lower().startswith("en"):       # find in English
@@ -255,7 +279,9 @@ def get_cvss_score(cve_id):
     if not cve_id or str(cve_id).lower() == "None":                                    # guard: no CVE to look up
         return 0.0
     info(f"Fetching CVSS score for {cve_id} from NIST...")  # status line
+
     # ----- BROWSER DISGUISE + OPTIONAL API KEY ------------------------
+
     headers ={
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHMTL, like Gecko) Chrome/114.0.0.0 Safari/537.36'
     }
@@ -292,10 +318,12 @@ def scan_target(target):
                     continue
 
                 # The vulners script output is only present when -sV found a version.
+
                 vulners_out = svc.get('script', {}).get('vulners', '')
 
                 # Pull CVE IDs from text, keeping vulners' worst-first order,
                 # dropping duplicates (each CVE appears twice: as an ID and in a URL).
+
                 seen, cves = set(), []
                 for cve in re.findall(r'CVE-\d{4}-\d+', vulners_out):  # regex-match CVE IDs
                     if cve not in seen:                               # first time seen
@@ -329,6 +357,7 @@ if __name__ == "__main__":
 
 
     # Start execution timer for the End-of-Run Summary
+
     start_time = time.time()
     
     show_banner()                                               # clear + print banner
@@ -427,8 +456,11 @@ if __name__ == "__main__":
     vuln_services = 0      # count how many services had at least one CVE
 
     # ---- Per-service report loop --------------------------------------
+
     for svc in services:
+
         # Build a banner: else the service name, else "unknown".
+
         banner = f"{svc['product']} {svc['version']}".strip() or svc['name'] or "unknown"
         endpoint = f"{svc['host']}:{svc['port']}/{svc['proto']}"     # e.g. 127.0.0.1:22/tcp
 
@@ -442,7 +474,9 @@ if __name__ == "__main__":
             continue                                                # move to next service
 
         vuln_services += 1                                          # this service has CVEs
+
         # Show only the top few CVEs (worst-first) to limit API calls.
+
         for cve in svc['cves'][:MAX_CVES_PER_SERVICE]:
             score = get_cvss_score(cve)                             # NIST: severity number
             desc = get_cve_description(cve)                         # CIRCL: description text
@@ -464,16 +498,20 @@ if __name__ == "__main__":
         from datetime import datetime
         
         # Generate a unique timestamp for the filenames (YYYY-MM-DD_HHMM)
+
         timestamp_str = datetime.now().strftime("%Y-%m-%d_%H%M")
         csv_filename = f"scan_report_{timestamp_str}.csv"
         pdf_filename = f"Executive_Report_{timestamp_str}.pdf"
 
         with open(csv_filename, mode="w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
+
             # Write the column headers
+
             writer.writerow(["Target", "Port", "Service", "CVE ID"])
             
             # Loop back through our results to populate the rows
+
             for s in services:
                 cves = s.get('cves', [])
                 if not cves:
@@ -491,6 +529,7 @@ if __name__ == "__main__":
     # =======================================================================
     # [+] TERMINAL DASHBOARD: END-OF-RUN SUMMARY
     # =======================================================================
+
     runtime = round(time.time() - start_time, 2)
     total_cves = sum(len(s.get('cves', [])) for s in services)
     label, color = severity(top_score)                             
@@ -508,15 +547,19 @@ if __name__ == "__main__":
     print(c("=" * 52, CYAN, BOLD))
 
     # Log the final metrics
+
     logging.info(f"Execution completed in {runtime}s. Vulnerable services: {vuln_services}. Total CVEs: {total_cves}.")
 
     # =======================================================================
     # [+] ENHANCEMENT: TRIGGER AUTOMATED PDF REPORT
     # =======================================================================
+
     print("\n" + c("[*] Launching PDF Report Generator...", CYAN))
     try:
         import subprocess
+
         # Pass the dashboard summary data AND the dynamic filenames directly into the PDF script
+
         subprocess.run([
             sys.executable, "report.py", 
             target, str(len(services)), str(vuln_services), 
