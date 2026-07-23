@@ -129,8 +129,12 @@ import nmap            # nmap wrapper
 
 # [+] ENHANCEMENT 2: Imported modules for Data Export and Auditing
 
-import csv             
-import logging         
+import csv
+import logging
+
+# [+] ENHANCEMENT 3: Imported for reading/writing the local CISA KEV cache file
+
+import json
 
 # Configure the persistent Operator Log
 
@@ -147,11 +151,20 @@ config.read('settings.ini')                # load ini file from cwd
 NIST_URL = config['API_ENDPOINTS']['nist_url']    # NVD score endpoint (+ cveId=)
 CIRCL_URL = config['API_ENDPOINTS']['circl_url']  # CIRCL description endpoint
 NIST_API_KEY = config['API_ENDPOINTS'].get('nist_api_key','') # Safely load key if it exists
+KEV_URL = config['API_ENDPOINTS'].get('kev_url','') # CISA KEV catalog (no key needed)
 
 # ---- Tunables ---------------------------------------------------------
 
 MAX_CVES_PER_SERVICE = 5   # list the top N CVEs per service (vulners lists worst-first)
 NIST_DELAY = 1.5           # seconds to wait between NIST calls (respect rate limit)
+
+# [+] ENHANCEMENT 3: CISA KEV local cache settings
+# The KEV feed is one big JSON file (the whole catalog, not per-CVE lookups),
+# so we pull it once per run and keep a copy on disk. If the copy on disk is
+# still younger than KEV_CACHE_HOURS, we reuse it instead of re-downloading.
+
+KEV_CACHE_FILE = "kev_cache.json"   # where the local copy of the catalog is stored
+KEV_CACHE_HOURS = 24                # how long the local copy stays "fresh"
 
 # ---- Colors: ANSI codes for terminal styling -------------------
 
@@ -303,6 +316,84 @@ def get_cvss_score(cve_id):
     return 0.0                                                       # default if no score found
 
 
+# =======================================================================
+# [+] ENHANCEMENT 3: CISA KEV (KNOWN EXPLOITED VULNERABILITIES) CATALOG
+# -----------------------------------------------------------------------
+# Unlike NIST/CIRCL, this is NOT a per-CVE lookup - it is one JSON download
+# of the entire catalog, which we index locally by CVE ID. That means
+# adding this enrichment costs exactly ONE extra network call per run,
+# not one per CVE, and it never counts against the NIST rate limit.
+# =======================================================================
+
+def load_kev_catalog():
+    """Download the CISA KEV catalog once, index it by CVE ID, and cache it
+    on disk so repeated runs within KEV_CACHE_HOURS don't re-download it."""
+    if not KEV_URL:                                        # guard: no URL configured
+        return {}
+
+    # ----- SERVE FROM A FRESH LOCAL CACHE IF WE HAVE ONE ---------------
+
+    if os.path.exists(KEV_CACHE_FILE):                                  # a cached copy exists
+        age_hours = (time.time() - os.path.getmtime(KEV_CACHE_FILE)) / 3600  # how old is it
+        if age_hours < KEV_CACHE_HOURS:                                 # still fresh enough
+            try:
+                with open(KEV_CACHE_FILE, "r", encoding="utf-8") as f:
+                    kev_map = json.load(f)                              # load cached dict
+                good(f"CISA KEV catalog loaded from local cache ({age_hours:.1f}h old, {len(kev_map)} entries).")
+                return kev_map
+            except Exception:                                           # corrupt cache file
+                pass                                                    # fall through and re-fetch live
+
+    # ----- OTHERWISE, FETCH THE LIVE CATALOG ----------------------------
+
+    info("Fetching CISA Known Exploited Vulnerabilities (KEV) catalog...")
+    try:
+        response = requests.get(KEV_URL, timeout=15)            # GET the full catalog
+        if response.status_code == 200:                         # success
+            data = response.json()                              # parse the JSON body
+
+            # Re-key the "vulnerabilities" list by cveID so lookups are O(1)
+            # instead of scanning the whole list for every CVE we found.
+
+            kev_map = {v["cveID"]: v for v in data.get("vulnerabilities", []) if "cveID" in v}
+
+            try:
+                with open(KEV_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(kev_map, f)                       # save for next run
+            except Exception as e:                              # disk write failed - not fatal
+                bad(f"Could not write KEV cache to disk: {e}")
+
+            good(f"CISA KEV catalog loaded: {len(kev_map)} known-exploited CVEs indexed.")
+            return kev_map
+        else:
+            bad(f"CISA KEV fetch failed (HTTP {response.status_code}).")
+    except Exception as e:                                       # network/JSON error
+        bad(f"CISA KEV API Error: {e}")
+
+    # ----- LIVE FETCH FAILED: FALL BACK TO A STALE CACHE IF WE HAVE ONE -
+
+    if os.path.exists(KEV_CACHE_FILE):
+        try:
+            with open(KEV_CACHE_FILE, "r", encoding="utf-8") as f:
+                kev_map = json.load(f)
+            bad("Using stale local KEV cache because the live fetch failed.")
+            return kev_map
+        except Exception:
+            pass
+
+    bad("CISA KEV catalog unavailable this run - continuing without it.")
+    return {}                                                    # never block the scan on this
+
+
+def kev_lookup(cve_id, kev_data):
+    """Return the CISA KEV entry for a CVE ID, or None if it isn't in the catalog.
+    This is a plain local dict lookup - no network call - so it's free to call
+    for every CVE, even ones we didn't spend a NIST call scoring."""
+    if not cve_id or not kev_data:                              # guard: nothing to check
+        return None
+    return kev_data.get(cve_id)
+
+
 def scan_target(target):
     """Run 'nmap -sV --script vulners' against target and collect CVEs per open service."""
     info(f"Scanning {target} (nmap -sV --script vulners)... this can take a minute.")
@@ -441,11 +532,16 @@ if __name__ == "__main__":
 
     logging.info(f"Target validated successfully: {target}")
 
-    # 4. Execute the Scan
+    # 4. Load the CISA KEV catalog (one download for the whole run, not per-CVE)
+
+    kev_data = load_kev_catalog()
+    logging.info(f"CISA KEV catalog ready with {len(kev_data)} entries.")
+
+    # 5. Execute the Scan
 
     services = scan_target(target)
 
-    # 5. Handle empty scan results
+    # 6. Handle empty scan results
 
     if not services:
         bad("No open ports found (host may be down, invalid, or filtering).")
@@ -454,6 +550,7 @@ if __name__ == "__main__":
 
     top_score = 0.0        # track highest severity seen (for the summary)
     vuln_services = 0      # count how many services had at least one CVE
+    kev_hits = 0            # count how many found CVEs are on the CISA KEV list
 
     # ---- Per-service report loop --------------------------------------
 
@@ -477,6 +574,11 @@ if __name__ == "__main__":
 
         # Show only the top few CVEs (worst-first) to limit API calls.
 
+        svc['cve_data'] = {}                                        # cache per-CVE results here so
+                                                                      # the CSV/PDF export below can
+                                                                      # reuse them instead of re-calling
+                                                                      # the NIST/CIRCL APIs a second time
+
         for cve in svc['cves'][:MAX_CVES_PER_SERVICE]:
             score = get_cvss_score(cve)                             # NIST: severity number
             desc = get_cve_description(cve)                         # CIRCL: description text
@@ -488,43 +590,117 @@ if __name__ == "__main__":
             for line in textwrap.wrap(desc, width=70):             # wrap description
                 print(f"    {line}")                               # indented, one line at a time
 
+            # ----- CISA KEV CHECK: free local dict lookup, no extra API call -----
+
+            kev_entry = kev_lookup(cve, kev_data)                  # None if not on the KEV list
+            if kev_entry:
+                kev_hits += 1                                       # tally for the summary line
+                due = kev_entry.get("dueDate", "Unknown")           # federal remediation deadline
+                action = kev_entry.get("requiredAction", "Apply vendor patch immediately.")
+                warning = f"CISA KEV: ACTIVELY EXPLOITED IN THE WILD - remediate by {due}"
+                print(f"    {c(warning, BRED, BOLD)}")             # bright-red banner, hard to miss
+                for line in textwrap.wrap(f"Required Action: {action}", width=70):
+                    print(f"    {line}")
+                logging.warning(f"{cve} is on the CISA KEV catalog (due {due}): {action}")
+
+            # Save everything we just fetched so the CSV/PDF export doesn't
+            # need to hit NIST/CIRCL again for the same CVE.
+
+            svc['cve_data'][cve] = {
+                'score': score,
+                'label': label,
+                'desc': desc,
+                'kev': bool(kev_entry),
+                'kev_due': kev_entry.get('dueDate', '') if kev_entry else '',
+                'kev_action': kev_entry.get('requiredAction', '') if kev_entry else '',
+            }
+
             time.sleep(NIST_DELAY)                                 # pace requests (rate limit)
 
     # =======================================================================
-    # [+] ENHANCEMENT: AUTOMATED CSV EXPORT (DYNAMIC FILENAMES)
+    # [+] ENHANCEMENT: ENRICHED CSV EXPORT (Actionable Data + Remediation)
+    # -----------------------------------------------------------------------
+    # This reuses the score/description/KEV data already fetched in the
+    # per-service loop above (svc['cve_data']) instead of calling NIST or
+    # CIRCL a second time for the same CVE - the report gets richer without
+    # costing any additional API calls.
     # =======================================================================
     try:
         import csv
         from datetime import datetime
-        
+
         # Generate a unique timestamp for the filenames (YYYY-MM-DD_HHMM)
 
         timestamp_str = datetime.now().strftime("%Y-%m-%d_%H%M")
         csv_filename = f"scan_report_{timestamp_str}.csv"
         pdf_filename = f"Executive_Report_{timestamp_str}.pdf"
 
+        logging.info(f"Initiating CSV report generation: {csv_filename}")
+
         with open(csv_filename, mode="w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
 
-            # Write the column headers
+            # Expanded headers for actionable analyst intelligence
 
-            writer.writerow(["Target", "Port", "Service", "CVE ID"])
-            
+            writer.writerow([
+                "Target", "Port", "Service", "CVE ID",
+                "CVSS Score", "Severity", "CISA KEV", "KEV Due Date",
+                "Remediation Guidance"
+            ])
+
             # Loop back through our results to populate the rows
 
             for s in services:
                 cves = s.get('cves', [])
+                cached = s.get('cve_data', {})   # scores/descriptions/KEV data fetched earlier
+
                 if not cves:
-                    writer.writerow([s['host'], s['port'], s['name'], "None - Clean"])
-                else:
-                    for cve in cves:
-                        writer.writerow([s['host'], s['port'], s['name'], cve])
-                        
+                    writer.writerow([
+                        s['host'], s['port'], s['name'], "None - Clean",
+                        "0.0", "NONE", "No", "",
+                        "No action required. Port is clean."
+                    ])
+                    continue
+
+                for cve in cves:
+                    data = cached.get(cve)   # only the top MAX_CVES_PER_SERVICE were scored live
+
+                    if data:
+                        # Already fetched above - reuse it, no new network call.
+
+                        score, label = data['score'], data['label']
+                        is_kev, kev_due, kev_action = data['kev'], data['kev_due'], data['kev_action']
+                    else:
+                        # This CVE was past the top-N cutoff and never scored, to keep
+                        # NIST call volume capped. The KEV check is still free (a local
+                        # dict lookup against the catalog we already downloaded once),
+                        # so we still run it - we just don't call NIST/CIRCL again here.
+
+                        score, label = "N/A", "UNSCORED"
+                        kev_entry = kev_lookup(cve, kev_data)
+                        is_kev = bool(kev_entry)
+                        kev_due = kev_entry.get('dueDate', '') if kev_entry else ''
+                        kev_action = kev_entry.get('requiredAction', '') if kev_entry else ''
+
+                    # CISA's required action is authoritative when a CVE is on the KEV
+                    # list; otherwise fall back to generic vendor-patch guidance.
+
+                    if is_kev:
+                        remediation = f"[CISA KEV - DUE {kev_due}] {kev_action}"
+                    else:
+                        remediation = f"Update {s['name']} package to latest vendor-patched version or apply patch for {cve}."
+
+                    writer.writerow([
+                        s['host'], s['port'], s['name'], cve,
+                        score, label, "Yes" if is_kev else "No", kev_due,
+                        remediation
+                    ])
+
         good(f"\nUser Report generated successfully: {csv_filename}")
-        logging.info(f"{csv_filename} generated successfully.")
+        logging.info(f"CSV report generated successfully: {csv_filename}")
     except Exception as e:
         bad(f"\nFailed to create CSV report: {e}")
-        logging.error(f"CSV Generation failed: {e}")
+        logging.error(f"CRITICAL EXCEPTION: CSV Generation failed: {e}")
 
     # =======================================================================
     # [+] TERMINAL DASHBOARD: END-OF-RUN SUMMARY
@@ -532,7 +708,12 @@ if __name__ == "__main__":
 
     runtime = round(time.time() - start_time, 2)
     total_cves = sum(len(s.get('cves', [])) for s in services)
-    label, color = severity(top_score)                             
+    label, color = severity(top_score)
+
+    # KEV line is red the moment even one match exists - that's the whole point
+    # of pulling this feed: it should be impossible for an analyst to miss.
+
+    kev_color = BRED if kev_hits > 0 else GREEN
 
     print("\n" + c("=" * 52, CYAN, BOLD))
     print(c("                SCAN COMPLETE", BOLD))
@@ -541,31 +722,39 @@ if __name__ == "__main__":
     print(f" Total Open Services:    {len(services)}")
     print(f" Vulnerable Services:    {vuln_services}")
     print(f" Total CVEs Found:       {total_cves}")
+    print(f" CISA KEV Matches:       {c(str(kev_hits), kev_color, BOLD)}")
     print(f" Highest Severity:       {c(f'{label} ({top_score}/10)', color, BOLD)}")
     print(f" Execution Time:         {runtime} seconds")
     print(f" Report Saved:           {csv_filename}")
     print(c("=" * 52, CYAN, BOLD))
 
-    # Log the final metrics
+    # Log the final completion metrics for the audit trail
 
-    logging.info(f"Execution completed in {runtime}s. Vulnerable services: {vuln_services}. Total CVEs: {total_cves}.")
+    logging.info(f"Scan completed successfully on target: {target}")
+    logging.info(
+        f"Execution summary -> Runtime: {runtime}s | Total Services: {len(services)} | "
+        f"Vulnerable Services: {vuln_services} | Total CVEs: {total_cves} | "
+        f"CISA KEV Matches: {kev_hits} | Peak Severity: {label} ({top_score}/10)"
+    )
 
     # =======================================================================
     # [+] ENHANCEMENT: TRIGGER AUTOMATED PDF REPORT
     # =======================================================================
 
     print("\n" + c("[*] Launching PDF Report Generator...", CYAN))
+    logging.info("Initiating hand-off to report.py for PDF generation.")
     try:
         import subprocess
 
         # Pass the dashboard summary data AND the dynamic filenames directly into the PDF script
 
         subprocess.run([
-            sys.executable, "report.py", 
-            target, str(len(services)), str(vuln_services), 
+            sys.executable, "report.py",
+            target, str(len(services)), str(vuln_services),
             str(total_cves), str(top_score), label, str(runtime),
             csv_filename, pdf_filename
         ])
+        logging.info(f"PDF report generated successfully: {pdf_filename}")
     except Exception as e:
         bad(f"Failed to automatically generate PDF report: {e}")
-        logging.error(f"Failed to execute report.py: {e}")
+        logging.error(f"CRITICAL EXCEPTION: Failed to execute report.py: {e}")

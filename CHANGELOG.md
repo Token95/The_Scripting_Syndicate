@@ -5,6 +5,18 @@ All notable changes to the **Live Threat Intel** project will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-07-22
+### Added
+- **CISA KEV (Known Exploited Vulnerabilities) Enrichment:** Added `load_kev_catalog()` / `kev_lookup()` to cross-reference every CVE found against CISA's public feed of actively-exploited vulnerabilities. The whole catalog is downloaded once per run (not per-CVE) and cached to `kev_cache.json` for `KEV_CACHE_HOURS` to avoid needless re-downloads. Matches trigger a bright-red "ACTIVELY EXPLOITED" banner in the terminal, a `CISA KEV Matches` line in the end-of-run dashboard, and a warning-level `operator.log` entry with the federal remediation due date.
+- **Enriched CSV/PDF Export:** CSV and PDF reports now include `CVSS Score`, `Severity`, `CISA KEV`, `KEV Due Date`, and `Remediation Guidance` columns instead of just the CVE ID, so both artifacts are actionable on their own without needing to cross-reference the terminal output.
+- **Authoritative Remediation Text:** When a CVE is on the CISA KEV list, its `requiredAction` text is used as the remediation guidance instead of the generic "update to latest version" fallback.
+
+### Changed
+- **No Duplicate API Calls:** The per-service scan loop now caches each CVE's fetched CVSS score/description/KEV status (`svc['cve_data']`) so the CSV export reuses that data instead of re-querying NIST/CIRCL for the same CVE a second time.
+- **Expanded Operator Log Coverage:** Added explicit `operator.log` entries for scan completion, the full execution summary, and each stage of the PDF hand-off (start, success, or `CRITICAL EXCEPTION` on failure), closing out the audit-trail requirement with a real, reviewable log of authorization, target selection, scan lifecycle, API failures, and report generation.
+
+---
+
 ## [2.3.0] - 2026-07-15
 ### Added
 - **Interactive Target Menu:** Replaced command-line arguments with a robust `while` loop menu. Operators can now choose between Localhost, Auto-detected Local Network, Custom Target, or a safe Exit option.

@@ -84,10 +84,22 @@ def draw_dashboard(pdf, stats):
     pdf.set_text_color(r, g, b)
     pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 8, f"{stats['label']} ({stats['top_score']}/10)", border="R", ln=True)
-    
+
     pdf.set_text_color(0, 0, 0)
     pdf.set_font("Arial", "", 11)
-    
+
+    # CISA KEV row - red the moment count > 0, since even one actively
+    # exploited CVE changes the priority of the whole report.
+
+    pdf.cell(60, 8, " CISA KEV Matches:", border="L")
+    kev_count = stats.get('kev_count', '0')
+    if int(kev_count) > 0:
+        pdf.set_text_color(200, 0, 0)
+        pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 8, kev_count, border="R", ln=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", "", 11)
+
     pdf.cell(60, 8, " Execution Time:", border="L, B")
     pdf.cell(0, 8, f"{stats['runtime']} seconds", border="R, B", ln=True)
     pdf.ln(10)
@@ -97,16 +109,22 @@ def generate_pdf(csv_file, pdf_file, stats):
         print(f"[-] Error: Could not find '{csv_file}'.")
         sys.exit(1)
 
-    pdf = PDFReport()
-    pdf.add_page()
-    
-    draw_dashboard(pdf, stats)
-    
+    # Read the CSV first so we can fold the CISA KEV count into the dashboard
+    # stats before drawing it - the CSV already carries a "CISA KEV" column
+    # per row from threat_intel.py, so no extra lookup is needed here.
+
     findings = []
     with open(csv_file, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             findings.append(row)
+
+    stats['kev_count'] = str(sum(1 for f in findings if f.get("CISA KEV") == "Yes"))
+
+    pdf = PDFReport()
+    pdf.add_page()
+
+    draw_dashboard(pdf, stats)
 
     if not findings:
         pdf.set_font("Arial", "B", 12)
@@ -122,18 +140,43 @@ def generate_pdf(csv_file, pdf_file, stats):
             pdf.multi_cell(0, 7, f"The machine at {target} was scanned. The following open ports and services were discovered, along with any known CVE vulnerabilities. Services marked as 'None - Clean' have no known immediate threats.")
             pdf.ln(5)
 
-            pdf.set_font("Arial", "B", 10)
-            pdf.cell(30, 8, "Port", border=1, align="C")
-            pdf.cell(60, 8, "Service", border=1, align="C")
-            pdf.cell(90, 8, "CVE ID", border=1, align="C")
+            # Column widths for a 190mm usable page width:
+            # Port(18) + Service(32) + CVE ID(30) + Score(16) + KEV(14) + Remediation(80) = 190
+
+            pdf.set_font("Arial", "B", 9)
+            pdf.cell(18, 8, "Port", border=1, align="C")
+            pdf.cell(32, 8, "Service", border=1, align="C")
+            pdf.cell(30, 8, "CVE ID", border=1, align="C")
+            pdf.cell(16, 8, "Score", border=1, align="C")
+            pdf.cell(14, 8, "KEV", border=1, align="C")
+            pdf.cell(80, 8, "Remediation", border=1, align="C")
             pdf.ln()
 
-            pdf.set_font("Arial", size=10)
+            pdf.set_font("Arial", size=9)
             target_findings = [f for f in findings if f.get("Target") == target]
             for finding in target_findings:
-                pdf.cell(30, 8, finding.get("Port", "N/A"), border=1, align="C")
-                pdf.cell(60, 8, finding.get("Service", "N/A"), border=1, align="C")
-                pdf.cell(90, 8, finding.get("CVE ID", "N/A"), border=1, align="C")
+                is_kev = finding.get("CISA KEV", "No") == "Yes"
+
+                pdf.cell(18, 8, finding.get("Port", "N/A"), border=1, align="C")
+                pdf.cell(32, 8, finding.get("Service", "N/A"), border=1, align="C")
+                pdf.cell(30, 8, finding.get("CVE ID", "N/A"), border=1, align="C")
+                pdf.cell(16, 8, finding.get("CVSS Score", "N/A"), border=1, align="C")
+
+                # Flag KEV matches in red so they stand out in the printed table
+
+                if is_kev:
+                    pdf.set_text_color(200, 0, 0)
+                    pdf.set_font("Arial", "B", 9)
+                pdf.cell(14, 8, "Yes" if is_kev else "No", border=1, align="C")
+                pdf.set_text_color(0, 0, 0)
+                pdf.set_font("Arial", size=9)
+
+                # Truncate remediation text slightly if it's too long for the cell width
+
+                rem_text = finding.get("Remediation Guidance", "Review vendor patch notes.")
+                if len(rem_text) > 48:
+                    rem_text = rem_text[:45] + "..."
+                pdf.cell(80, 8, rem_text, border=1, align="L")
                 pdf.ln()
             pdf.ln(5)
 
