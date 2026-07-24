@@ -155,7 +155,9 @@ KEV_URL = config['API_ENDPOINTS'].get('kev_url','') # CISA KEV catalog (no key n
 
 # ---- Tunables ---------------------------------------------------------
 
-MAX_CVES_PER_SERVICE = 5   # list the top N CVEs per service (vulners lists worst-first)
+MAX_CVES_PER_SERVICE = 5   # cap on how many CVEs per service get full detail PRINTED to the
+                           # terminal (vulners lists worst-first); every CVE found is still
+                           # scored, described, and KEV-checked for the CSV/PDF report below
 NIST_DELAY = 1.5           # seconds to wait between NIST calls (respect rate limit)
 
 # [+] ENHANCEMENT 3: CISA KEV local cache settings
@@ -266,25 +268,46 @@ def show_banner():
     print()                                                       # blank spacer
 
 
-def get_cve_description(cve_id):
-    """Hit CIRCL's Vulnerability-Lookup API and return a plain-English description."""
-    if not cve_id or str(cve_id).lower() == "None":                                    # guard: no CVE to look up
-        return "No vulnerability identified."
-    info(f"Fetching description for {cve_id} from CIRCL...") # status line
+def get_cve_details(cve_id):
+    """Hit CIRCL's Vulnerability-Lookup API ONCE and return (description, solution).
+    The CVE 5.0 record we already download for the description can also carry a
+    CNA-supplied "solutions"/"workarounds" block with real fix guidance - reading
+    both fields off the same response means CVE-specific remediation text costs
+    no extra API call beyond the description lookup we were already making."""
+    if not cve_id or str(cve_id).lower() == "none":                  # guard: no CVE to look up
+        return "No vulnerability identified.", ""
+    info(f"Fetching description for {cve_id} from CIRCL...")         # status line
     try:
         response = requests.get(f"{CIRCL_URL}{cve_id}", timeout=10)   # GET the CVE record
         if response.status_code == 200 and response.json():          # got a valid JSON body
             data = response.json()                                   # parse it
+            cna = data.get("containers", {}).get("cna", {})           # CVE 5.0 CNA container
 
-            # In the CVE 5.0 format the text lives at containers.cna.descriptions[].
+            # ----- DESCRIPTION: containers.cna.descriptions[] -----------------
 
-            descriptions = data.get("containers", {}).get("cna", {}).get("descriptions", [])
-            for d in descriptions:                                   # look through each entry
+            description = "Description not found."
+            for d in cna.get("descriptions", []):                    # look through each entry
                 if d.get("lang", "").lower().startswith("en"):       # find in English
-                    return d.get("value", "Description not found.")  # return text
+                    description = d.get("value", description)
+                    break
+
+            # ----- SOLUTION: containers.cna.solutions[] / workarounds[] --------
+            # Optional per the CVE 5.0 schema - most records won't have one,
+            # so we fall back to a generic remediation string at the call site.
+
+            solution = ""
+            for block_key in ("solutions", "workarounds"):
+                for entry in cna.get(block_key, []):
+                    if entry.get("lang", "").lower().startswith("en") and entry.get("value"):
+                        solution = entry["value"]
+                        break
+                if solution:
+                    break
+
+            return description, solution
     except Exception as e:                                           # network/JSON error
         bad(f"CIRCL API Error: {e}")
-    return "Failed to retrieve description."                         # default if nothing matched
+    return "Failed to retrieve description.", ""                     # default if nothing matched
 
 
 def get_cvss_score(cve_id):
@@ -572,36 +595,46 @@ if __name__ == "__main__":
 
         vuln_services += 1                                          # this service has CVEs
 
-        # Show only the top few CVEs (worst-first) to limit API calls.
+        # Every CVE gets scored/described/checked against KEV here so the CSV/PDF
+        # report is complete - MAX_CVES_PER_SERVICE only caps how many get printed
+        # to the terminal in full, so the live view stays readable on noisy hosts.
 
         svc['cve_data'] = {}                                        # cache per-CVE results here so
                                                                       # the CSV/PDF export below can
                                                                       # reuse them instead of re-calling
                                                                       # the NIST/CIRCL APIs a second time
 
-        for cve in svc['cves'][:MAX_CVES_PER_SERVICE]:
+        for idx, cve in enumerate(svc['cves']):
             score = get_cvss_score(cve)                             # NIST: severity number
-            desc = get_cve_description(cve)                         # CIRCL: description text
+            desc, solution = get_cve_details(cve)                   # CIRCL: description + optional fix text
             top_score = max(top_score, score)                      # update running max
 
             label, color = severity(score)                         # bucket + color for score
-            badge = c(f"{label:<8} {score:>4}/10", color, BOLD)    # e.g. "HIGH   8.1/10"
-            print(f"\n  {c(cve, BOLD)}   {badge}")                 # CVE id + severity badge
-            for line in textwrap.wrap(desc, width=70):             # wrap description
-                print(f"    {line}")                               # indented, one line at a time
 
             # ----- CISA KEV CHECK: free local dict lookup, no extra API call -----
 
             kev_entry = kev_lookup(cve, kev_data)                  # None if not on the KEV list
+            due = kev_entry.get("dueDate", "Unknown") if kev_entry else ""
+            action = kev_entry.get("requiredAction", "Apply vendor patch immediately.") if kev_entry else ""
             if kev_entry:
                 kev_hits += 1                                       # tally for the summary line
-                due = kev_entry.get("dueDate", "Unknown")           # federal remediation deadline
-                action = kev_entry.get("requiredAction", "Apply vendor patch immediately.")
-                warning = f"CISA KEV: ACTIVELY EXPLOITED IN THE WILD - remediate by {due}"
-                print(f"    {c(warning, BRED, BOLD)}")             # bright-red banner, hard to miss
-                for line in textwrap.wrap(f"Required Action: {action}", width=70):
-                    print(f"    {line}")
-                logging.warning(f"{cve} is on the CISA KEV catalog (due {due}): {action}")
+
+            # ----- CVE-SPECIFIC REMEDIATION: KEV > CIRCL fix text > severity fallback -----
+            # CISA's required action is authoritative when a CVE is actively exploited.
+            # Otherwise, prefer any real vendor solution text CIRCL published for this
+            # CVE (same response we already fetched above, no extra call). Only fall
+            # back to a generic severity-tier recommendation when neither exists.
+
+            if kev_entry:
+                remediation = f"[CISA KEV - DUE {due}] {action}"
+            elif solution:
+                remediation = solution
+            elif score >= 9.0:
+                remediation = f"CRITICAL: Immediately isolate the service or apply the vendor patch for {cve}."
+            elif score >= 7.0:
+                remediation = f"HIGH: Update {svc['name']} to the latest patched version to close {cve}."
+            else:
+                remediation = f"Review the vendor advisory for {cve} and schedule a patch during the next maintenance window."
 
             # Save everything we just fetched so the CSV/PDF export doesn't
             # need to hit NIST/CIRCL again for the same CVE.
@@ -611,11 +644,33 @@ if __name__ == "__main__":
                 'label': label,
                 'desc': desc,
                 'kev': bool(kev_entry),
-                'kev_due': kev_entry.get('dueDate', '') if kev_entry else '',
-                'kev_action': kev_entry.get('requiredAction', '') if kev_entry else '',
+                'remediation': remediation,
             }
 
+            # Print full detail only for the first N CVEs per service - every CVE
+            # was still scored and cached above for the report, so nothing shows
+            # up there as "N/A" even though the terminal only shows the top few.
+
+            if idx < MAX_CVES_PER_SERVICE:
+                badge = c(f"{label:<8} {score:>4}/10", color, BOLD)    # e.g. "HIGH   8.1/10"
+                print(f"\n  {c(cve, BOLD)}   {badge}")                 # CVE id + severity badge
+                for line in textwrap.wrap(desc, width=70):             # wrap description
+                    print(f"    {line}")                               # indented, one line at a time
+
+                if kev_entry:
+                    warning = f"CISA KEV: ACTIVELY EXPLOITED IN THE WILD - remediate by {due}"
+                    print(f"    {c(warning, BRED, BOLD)}")             # bright-red banner, hard to miss
+                    for line in textwrap.wrap(f"Required Action: {action}", width=70):
+                        print(f"    {line}")
+
+            if kev_entry:
+                logging.warning(f"{cve} is on the CISA KEV catalog (due {due}): {action}")
+
             time.sleep(NIST_DELAY)                                 # pace requests (rate limit)
+
+        remaining = len(svc['cves']) - MAX_CVES_PER_SERVICE
+        if remaining > 0:
+            info(f"...plus {remaining} more CVE(s) for this service - full details are in the CSV/PDF report.")
 
     # =======================================================================
     # [+] ENHANCEMENT: ENRICHED CSV EXPORT (Actionable Data + Remediation)
@@ -625,79 +680,46 @@ if __name__ == "__main__":
     # CIRCL a second time for the same CVE - the report gets richer without
     # costing any additional API calls.
     # =======================================================================
+
     try:
         import csv
         from datetime import datetime
-
-        # Generate a unique timestamp for the filenames (YYYY-MM-DD_HHMM)
-
+        
         timestamp_str = datetime.now().strftime("%Y-%m-%d_%H%M")
         csv_filename = f"scan_report_{timestamp_str}.csv"
         pdf_filename = f"Executive_Report_{timestamp_str}.pdf"
 
-        logging.info(f"Initiating CSV report generation: {csv_filename}")
+        logging.info(f"Initiating enriched CSV report generation: {csv_filename}")
 
         with open(csv_filename, mode="w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
-
-            # Expanded headers for actionable analyst intelligence
-
+            # Comprehensive headers for a standalone executive report
             writer.writerow([
                 "Target", "Port", "Service", "CVE ID",
-                "CVSS Score", "Severity", "CISA KEV", "KEV Due Date",
-                "Remediation Guidance"
+                "CVSS Score", "Severity", "CISA KEV", "Description", "Remediation Guidance"
             ])
-
-            # Loop back through our results to populate the rows
 
             for s in services:
                 cves = s.get('cves', [])
-                cached = s.get('cve_data', {})   # scores/descriptions/KEV data fetched earlier
+                cached = s.get('cve_data', {})   # every CVE was already scored/cached above
 
                 if not cves:
                     writer.writerow([
                         s['host'], s['port'], s['name'], "None - Clean",
-                        "0.0", "NONE", "No", "",
-                        "No action required. Port is clean."
+                        "0.0", "NONE", "No",
+                        "No vulnerabilities detected.", "No action required. Port is operating normally."
                     ])
-                    continue
-
-                for cve in cves:
-                    data = cached.get(cve)   # only the top MAX_CVES_PER_SERVICE were scored live
-
-                    if data:
-                        # Already fetched above - reuse it, no new network call.
-
-                        score, label = data['score'], data['label']
-                        is_kev, kev_due, kev_action = data['kev'], data['kev_due'], data['kev_action']
-                    else:
-                        # This CVE was past the top-N cutoff and never scored, to keep
-                        # NIST call volume capped. The KEV check is still free (a local
-                        # dict lookup against the catalog we already downloaded once),
-                        # so we still run it - we just don't call NIST/CIRCL again here.
-
-                        score, label = "N/A", "UNSCORED"
-                        kev_entry = kev_lookup(cve, kev_data)
-                        is_kev = bool(kev_entry)
-                        kev_due = kev_entry.get('dueDate', '') if kev_entry else ''
-                        kev_action = kev_entry.get('requiredAction', '') if kev_entry else ''
-
-                    # CISA's required action is authoritative when a CVE is on the KEV
-                    # list; otherwise fall back to generic vendor-patch guidance.
-
-                    if is_kev:
-                        remediation = f"[CISA KEV - DUE {kev_due}] {kev_action}"
-                    else:
-                        remediation = f"Update {s['name']} package to latest vendor-patched version or apply patch for {cve}."
-
-                    writer.writerow([
-                        s['host'], s['port'], s['name'], cve,
-                        score, label, "Yes" if is_kev else "No", kev_due,
-                        remediation
-                    ])
+                else:
+                    for cve in cves:
+                        data = cached[cve]   # reuse - no second NIST/CIRCL call for the same CVE
+                        writer.writerow([
+                            s['host'], s['port'], s['name'], cve,
+                            data['score'], data['label'], "Yes" if data['kev'] else "No",
+                            data['desc'], data['remediation']
+                        ])
 
         good(f"\nUser Report generated successfully: {csv_filename}")
-        logging.info(f"CSV report generated successfully: {csv_filename}")
+        logging.info(f"Enriched CSV report generated successfully: {csv_filename}")
     except Exception as e:
         bad(f"\nFailed to create CSV report: {e}")
         logging.error(f"CRITICAL EXCEPTION: CSV Generation failed: {e}")

@@ -5,6 +5,18 @@ All notable changes to the **Live Threat Intel** project will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-07-23
+### Added
+- **Self-Contained PDF Findings:** PDF report now renders each CVE as its own card (severity/score line, full description, remediation) instead of a compact table, so the report reads as clearly as the terminal output without needing to cross-reference it.
+- **CVE-Specific Remediation:** Remediation text is now built per CVE instead of a single generic template: CISA KEV's `requiredAction` wins if the CVE is actively exploited, otherwise any real vendor solution/workaround text CIRCL published for that CVE is used, falling back to a severity-tier recommendation only when neither exists.
+
+### Fixed
+- **All CVEs Now Scored, Not Just the Top 5:** `MAX_CVES_PER_SERVICE` previously capped which CVEs got a CVSS score/description at all, so anything past the top 5 per service showed "N/A" in the CSV/PDF. It now only caps how many get printed in full to the terminal - every CVE found is still scored, described, and KEV-checked, so the report is complete even when the live view stays trimmed for readability.
+- **Removed Duplicate NIST/CIRCL Calls:** The CSV export had regressed to re-fetching CVSS score and description for every CVE a second time (on top of the per-service scan loop already fetching them once). It now reuses the same per-service cache the scan loop builds, so each CVE costs exactly one NIST call and one CIRCL call for the whole run.
+- **CIRCL Fetched Once Per CVE:** `get_cve_description()` was replaced with `get_cve_details()`, which reads both the description and any vendor solution/workaround text off the single CIRCL response instead of requiring a second call for remediation text.
+
+---
+
 ## [2.4.0] - 2026-07-22
 ### Added
 - **CISA KEV (Known Exploited Vulnerabilities) Enrichment:** Added `load_kev_catalog()` / `kev_lookup()` to cross-reference every CVE found against CISA's public feed of actively-exploited vulnerabilities. The whole catalog is downloaded once per run (not per-CVE) and cached to `kev_cache.json` for `KEV_CACHE_HOURS` to avoid needless re-downloads. Matches trigger a bright-red "ACTIVELY EXPLOITED" banner in the terminal, a `CISA KEV Matches` line in the end-of-run dashboard, and a warning-level `operator.log` entry with the federal remediation due date.

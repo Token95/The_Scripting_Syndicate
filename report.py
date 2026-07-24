@@ -133,52 +133,45 @@ def generate_pdf(csv_file, pdf_file, stats):
         targets = set(f["Target"] for f in findings if "Target" in f)
         for target in targets:
             pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, f"Detailed Findings: {target}", ln=True)
+            pdf.cell(0, 10, f"Detailed Findings for Target: {target}", ln=True)
             pdf.ln(2)
-            
-            pdf.set_font("Arial", size=11)
-            pdf.multi_cell(0, 7, f"The machine at {target} was scanned. The following open ports and services were discovered, along with any known CVE vulnerabilities. Services marked as 'None - Clean' have no known immediate threats.")
-            pdf.ln(5)
 
-            # Column widths for a 190mm usable page width:
-            # Port(18) + Service(32) + CVE ID(30) + Score(16) + KEV(14) + Remediation(80) = 190
-
-            pdf.set_font("Arial", "B", 9)
-            pdf.cell(18, 8, "Port", border=1, align="C")
-            pdf.cell(32, 8, "Service", border=1, align="C")
-            pdf.cell(30, 8, "CVE ID", border=1, align="C")
-            pdf.cell(16, 8, "Score", border=1, align="C")
-            pdf.cell(14, 8, "KEV", border=1, align="C")
-            pdf.cell(80, 8, "Remediation", border=1, align="C")
-            pdf.ln()
-
-            pdf.set_font("Arial", size=9)
             target_findings = [f for f in findings if f.get("Target") == target]
+
             for finding in target_findings:
-                is_kev = finding.get("CISA KEV", "No") == "Yes"
+                cve_id = finding.get("CVE ID", "N/A")
+                port = finding.get("Port", "N/A")
+                service = finding.get("Service", "N/A")
+                score = finding.get("CVSS Score", "0.0")
+                label = finding.get("Severity", "NONE")
+                desc = finding.get("Description", "No description available.")
+                remediation = finding.get("Remediation Guidance", "Review vendor advisory.")
 
-                pdf.cell(18, 8, finding.get("Port", "N/A"), border=1, align="C")
-                pdf.cell(32, 8, finding.get("Service", "N/A"), border=1, align="C")
-                pdf.cell(30, 8, finding.get("CVE ID", "N/A"), border=1, align="C")
-                pdf.cell(16, 8, finding.get("CVSS Score", "N/A"), border=1, align="C")
+                # Vulnerability Card Header Box
+                pdf.set_font("Arial", "B", 11)
+                pdf.set_fill_color(240, 240, 240)
+                pdf.cell(0, 7, f" Port {port} ({service})  |  Vulnerability: {cve_id}", border=1, ln=True, fill=True)
 
-                # Flag KEV matches in red so they stand out in the printed table
+                # Severity and Score line
+                pdf.set_font("Arial", "B", 10)
+                r, g, b = get_severity_color(label)
+                pdf.set_text_color(r, g, b)
+                pdf.cell(40, 6, f"Severity: {label}", border="L")
+                pdf.cell(40, 6, f"CVSS Score: {score}/10", border="R", ln=True)
+                pdf.set_text_color(0, 0, 0) # Reset text color
 
-                if is_kev:
-                    pdf.set_text_color(200, 0, 0)
-                    pdf.set_font("Arial", "B", 9)
-                pdf.cell(14, 8, "Yes" if is_kev else "No", border=1, align="C")
-                pdf.set_text_color(0, 0, 0)
-                pdf.set_font("Arial", size=9)
+                # Description block
+                pdf.set_font("Arial", "B", 9)
+                pdf.cell(0, 5, "Description:", border="L, R", ln=True)
+                pdf.set_font("Arial", "", 9)
+                pdf.multi_cell(0, 5, desc, border="L, R")
 
-                # Truncate remediation text slightly if it's too long for the cell width
-
-                rem_text = finding.get("Remediation Guidance", "Review vendor patch notes.")
-                if len(rem_text) > 48:
-                    rem_text = rem_text[:45] + "..."
-                pdf.cell(80, 8, rem_text, border=1, align="L")
-                pdf.ln()
-            pdf.ln(5)
+                # Remediation block
+                pdf.set_font("Arial", "B", 9)
+                pdf.cell(0, 5, "Remediation Guidance:", border="L, R", ln=True)
+                pdf.set_font("Arial", "I", 9) # Italicize remediation for emphasis
+                pdf.multi_cell(0, 5, remediation, border="L, R, B")
+                pdf.ln(4) # Spacing between vulnerability cards
 
     # Team Roster
 
